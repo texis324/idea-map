@@ -101,13 +101,21 @@
     font-size:13px;display:none;box-shadow:0 8px 24px rgba(0,0,0,.5);max-width:80vw;}
   #toast.err{border-color:var(--danger);}
 
-  /* key modal */
-  #keymask{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;}
-  #keybox{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;width:440px;max-width:92vw;}
-  #keybox h3{margin:0 0 6px;font-size:16px;}
-  #keybox p{margin:0 0 14px;font-size:12px;color:var(--sub);line-height:1.6;}
-  #keybox input{width:100%;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--txt);font-size:13px;-webkit-user-select:text;user-select:text;}
-  #keybox .row{display:flex;gap:8px;margin-top:14px;justify-content:flex-end;}
+  /* modals (key + cloud) */
+  #keymask,#cloudmask{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;}
+  #keybox,#cloudbox{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;width:460px;max-width:92vw;}
+  #keybox h3,#cloudbox h3{margin:0 0 6px;font-size:16px;}
+  #keybox p,#cloudbox p{margin:0 0 14px;font-size:12px;color:var(--sub);line-height:1.6;}
+  #keybox input,#cloudbox input{width:100%;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--txt);font-size:13px;-webkit-user-select:text;user-select:text;}
+  #keybox .row,#cloudbox .row{display:flex;gap:8px;margin-top:14px;align-items:center;justify-content:flex-end;}
+  .cloudstat{font-size:12px;color:var(--sub);margin-top:10px;padding:2px;}
+  /* cloud status dot on toolbar button */
+  #cloudBtn .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-left:5px;background:#5a6573;vertical-align:middle;}
+  #cloudBtn.off .dot{background:#5a6573;}
+  #cloudBtn.saving{border-color:var(--accent2);} #cloudBtn.saving .dot{background:var(--accent2);animation:cloudpulse 1s infinite;}
+  #cloudBtn.saved{border-color:#2e7d4f;} #cloudBtn.saved .dot{background:#7ee787;}
+  #cloudBtn.error{border-color:var(--danger);} #cloudBtn.error .dot{background:var(--danger);}
+  @keyframes cloudpulse{50%{opacity:.25;}}
 
   /* ---- mobile ---- */
   @media (max-width:640px){
@@ -140,6 +148,7 @@
     </select>
     <span id="cost">¥0.00<br><span style="font-size:10px">0 / 0 tok</span></span>
     <button class="btn" id="keyBtn" title="APIキー">⚙</button>
+    <button class="btn off" id="cloudBtn" title="クラウドバックアップ">☁<span class="dot"></span></button>
     <button class="btn" id="saveBtn" title="JSONで書き出し">⬇</button>
     <button class="btn" id="loadBtn" title="JSON読み込み">⬆</button>
     <button class="btn" id="clearBtn" title="全消去">🗑</button>
@@ -174,6 +183,22 @@
     選択中: <b>Tab</b>子・<b>Enter</b>兄弟・<b>E</b>展開・<b>Del</b>削除
   </div>
   <div id="toast"></div>
+
+  <div id="cloudmask">
+    <div id="cloudbox">
+      <h3>☁ クラウドバックアップ（GitHub Gist）</h3>
+      <p>変更を自動で<b>秘密Gist</b>に退避。localStorageが消えても復元できる＆PC↔スマホ同期にも。トークンはこのブラウザだけに保存。<br>
+      <b>作り方</b>: GitHub → Settings → Developer settings → Personal access tokens → <b>Tokens (classic)</b> → Generate → スコープは<b>「gist」だけ</b>ON。</p>
+      <input id="ghToken" type="password" placeholder="ghp_…（gistスコープのclassicトークン）" autocomplete="off">
+      <div class="cloudstat" id="cloudStat">未設定</div>
+      <div class="row">
+        <button class="btn" id="cloudRestore">クラウドから復元</button>
+        <span style="flex:1"></span>
+        <button class="btn" id="cloudCancel">閉じる</button>
+        <button class="btn on" id="cloudSaveBtn">保存して同期</button>
+      </div>
+    </div>
+  </div>
 
   <div id="keymask">
     <div id="keybox">
@@ -217,30 +242,40 @@ const ring=document.getElementById("ring");
 const boltPop=document.getElementById("boltPop");
 
 //============================================================ persistence
+let wasEmpty=false; // true when boot found NO local data at all (loss / new device)
+function snapshot(){
+  return {nodes:S.nodes, links:S.links, root:S.root, pan:S.pan, zoom:S.zoom,
+    ai:S.ai, model:S.model, cost:S.cost, idc};
+}
+function applyState(d){
+  S.nodes=d.nodes||{}; S.links=d.links||[]; S.root=d.root||null;
+  S.pan=d.pan||S.pan; S.zoom=d.zoom||1; S.ai=d.ai!==false;
+  S.model=d.model||S.model; S.cost=d.cost||{in:0,out:0}; idc=d.idc||1;
+  if(S.root && !S.nodes[S.root]) S.root=Object.keys(S.nodes)[0]||null;
+  if(sel && !S.nodes[sel]) sel=null;
+}
 function save(){
-  try{ localStorage.setItem(LS, JSON.stringify({
-    nodes:S.nodes, links:S.links, root:S.root, pan:S.pan, zoom:S.zoom,
-    ai:S.ai, model:S.model, cost:S.cost, idc
-  })); }catch(e){}
+  try{ localStorage.setItem(LS, JSON.stringify(snapshot())); }catch(e){}
+  scheduleCloud(); // debounced backup to GitHub Gist
 }
 function load(){
   let raw=null; try{ raw=localStorage.getItem(LS); }catch(e){}
-  if(raw){
-    try{
-      const d=JSON.parse(raw);
-      S.nodes=d.nodes||{}; S.links=d.links||[]; S.root=d.root||null;
-      S.pan=d.pan||S.pan; S.zoom=d.zoom||1; S.ai=d.ai!==false;
-      S.model=d.model||S.model; S.cost=d.cost||{in:0,out:0}; idc=d.idc||1;
-    }catch(e){}
+  let parsed=null;
+  if(raw){ try{ parsed=JSON.parse(raw); }catch(e){ parsed=null; } }
+  if(!parsed){ // main missing/corrupt → fall back to the last-good local backup
+    try{ const b=localStorage.getItem(LS+"_bak"); if(b){ parsed=JSON.parse(b); } }catch(e){}
   }
-  if(!raw){ // first run only: plant one seed (a touch larger so it reads as the trunk)
+  if(parsed){
+    applyState(parsed);
+  }else{ // no local data anywhere: first run OR data loss / new device
+    wasEmpty=true;
     S.nodes={}; S.links=[];
     const r=mkNode("ここに種を置く", 0, 0, null, 0); r.size=1.6;
     S.root=r.id; sel=r.id;
-  }else{ // respect an intentionally-empty canvas; just fix dangling refs
-    if(S.root && !S.nodes[S.root]) S.root=Object.keys(S.nodes)[0]||null;
-    if(sel && !S.nodes[sel]) sel=null;
   }
+  // stash a start-of-session good copy, untouched for the rest of the session,
+  // so a logic bug that empties+saves this session can't destroy the prior state.
+  if(parsed){ try{ localStorage.setItem(LS+"_bak", JSON.stringify(parsed)); }catch(e){} }
 }
 function getKey(){ try{return localStorage.getItem(KEYLS)||"";}catch(e){return"";} }
 
@@ -846,12 +881,120 @@ document.getElementById("keySave").onclick=()=>{
 };
 keymask.onclick=e=>{ if(e.target===keymask) keymask.style.display="none"; };
 
+//============================================================ cloud backup (GitHub Gist)
+const GHTOK="ideamap_ghtoken", GISTID="ideamap_gistid", GISTFILE="idea-map.json";
+let cloudTimer=null, cloudBusy=false, cloudPending=false, cloudReady=false, cloudLastSync=0;
+function nowMs(){ return Date.now(); }
+function fmtTime(t){ const d=new Date(t),p=n=>String(n).padStart(2,"0"); return p(d.getHours())+":"+p(d.getMinutes()); }
+function cloudCfg(){ let t="",g=""; try{t=localStorage.getItem(GHTOK)||"";g=localStorage.getItem(GISTID)||"";}catch(e){} return {token:t,gistId:g}; }
+function setCloudBtn(state){ const b=document.getElementById("cloudBtn"); if(b) b.className="btn"+(state?" "+state:""); }
+function setCloudStat(msg){ const e=document.getElementById("cloudStat"); if(e) e.textContent=msg; }
+function refreshCloudStat(){
+  const {token,gistId}=cloudCfg();
+  if(!token){ setCloudStat("未設定（トークンを入れると自動バックアップ開始）"); return; }
+  setCloudStat(gistId ? ("同期ON"+(cloudLastSync?(" / 最終 "+fmtTime(cloudLastSync)):"")) : "同期ON（まだ未アップロード）");
+}
+function scheduleCloud(){
+  if(!cloudReady) return;                 // don't push until boot/restore settled
+  const {token}=cloudCfg(); if(!token) return;
+  if(cloudTimer) clearTimeout(cloudTimer);
+  cloudTimer=setTimeout(cloudPush, 4000); // debounce bursts of edits into one upload
+}
+async function ghApi(url,opts){
+  const {token}=cloudCfg();
+  const res=await fetch(url,{...opts, headers:{
+    "Authorization":"Bearer "+token,
+    "Accept":"application/vnd.github+json",
+    "X-GitHub-Api-Version":"2022-11-28",
+    ...((opts&&opts.body)?{"Content-Type":"application/json"}:{})
+  }});
+  if(!res.ok){ let m=res.status+""; try{const j=await res.json(); m=j.message||m;}catch(e){}
+    if(res.status===401) m="トークンが無効（classicの『gist』スコープが必要）";
+    throw new Error(m); }
+  return res.json();
+}
+async function cloudFindGist(){
+  const list=await ghApi("https://api.github.com/gists?per_page=100",{method:"GET"});
+  const hit=Array.isArray(list)?list.find(g=>g.files && g.files[GISTFILE]):null;
+  return hit?hit.id:"";
+}
+async function cloudPush(){
+  const {token}=cloudCfg(); if(!token) return;
+  if(cloudBusy){ cloudPending=true; return; }
+  cloudBusy=true; setCloudBtn("saving"); setCloudStat("保存中…");
+  try{
+    let {gistId}=cloudCfg();
+    const content=JSON.stringify(snapshot());
+    const body=JSON.stringify({files:{[GISTFILE]:{content}}});
+    if(!gistId){ gistId=await cloudFindGist(); if(gistId){ try{localStorage.setItem(GISTID,gistId);}catch(e){} } }
+    if(gistId){
+      await ghApi("https://api.github.com/gists/"+gistId,{method:"PATCH",body});
+    }else{
+      const created=await ghApi("https://api.github.com/gists",{method:"POST",
+        body:JSON.stringify({description:"IDEA MAP backup",public:false,files:{[GISTFILE]:{content}}})});
+      try{localStorage.setItem(GISTID,created.id);}catch(e){}
+    }
+    cloudLastSync=nowMs(); setCloudBtn("saved"); setCloudStat("同期済 "+fmtTime(cloudLastSync));
+  }catch(e){ setCloudBtn("error"); setCloudStat("エラー: "+e.message); }
+  finally{ cloudBusy=false; if(cloudPending){ cloudPending=false; scheduleCloud(); } }
+}
+async function cloudPull(){
+  let {gistId}=cloudCfg();
+  if(!gistId){ gistId=await cloudFindGist(); if(gistId){ try{localStorage.setItem(GISTID,gistId);}catch(e){} } }
+  if(!gistId) return null;
+  const g=await ghApi("https://api.github.com/gists/"+gistId,{method:"GET"});
+  const f=g.files && g.files[GISTFILE]; if(!f) return null;
+  let content=f.content;
+  if(f.truncated && f.raw_url){ const r=await fetch(f.raw_url); content=await r.text(); }
+  try{ return JSON.parse(content); }catch(e){ return null; }
+}
+async function cloudBoot(){
+  const {token}=cloudCfg();
+  if(!token){ setCloudBtn("off"); setCloudStat("未設定"); cloudReady=true; return; }
+  setCloudBtn("saved");
+  try{
+    if(wasEmpty){ // local data was gone → try to recover from the cloud
+      const data=await cloudPull();
+      if(data && data.nodes && Object.keys(data.nodes).length){
+        applyState(data); render(); toast("☁ クラウドから復元しました");
+      }
+    }
+    setCloudStat("同期ON");
+  }catch(e){ setCloudBtn("error"); setCloudStat("エラー: "+e.message); }
+  cloudReady=true; // now safe to auto-push
+}
+// cloud modal wiring
+const cloudmask=document.getElementById("cloudmask");
+function openCloud(){ document.getElementById("ghToken").value=cloudCfg().token; refreshCloudStat(); cloudmask.style.display="flex"; setTimeout(()=>document.getElementById("ghToken").focus(),50); }
+document.getElementById("cloudBtn").onclick=openCloud;
+document.getElementById("cloudCancel").onclick=()=>cloudmask.style.display="none";
+cloudmask.onclick=e=>{ if(e.target===cloudmask) cloudmask.style.display="none"; };
+document.getElementById("cloudSaveBtn").onclick=async()=>{
+  const v=document.getElementById("ghToken").value.trim();
+  try{ localStorage.setItem(GHTOK, v); }catch(e){}
+  if(!v){ try{localStorage.removeItem(GISTID);}catch(e){} cloudReady=false; setCloudBtn("off"); setCloudStat("未設定"); toast("クラウド連携を解除"); return; }
+  cloudReady=true; setCloudStat("接続中…");
+  try{ await cloudPush(); toast("☁ 同期した"); cloudmask.style.display="none"; }
+  catch(e){ toast("同期失敗: "+e.message,true); }
+};
+document.getElementById("cloudRestore").onclick=async()=>{
+  if(!cloudCfg().token){ toast("先にトークンを保存してね"); return; }
+  setCloudStat("取得中…");
+  try{
+    const data=await cloudPull();
+    if(!data || !data.nodes || !Object.keys(data.nodes).length){ toast("クラウドにデータが無い",true); refreshCloudStat(); return; }
+    if(!confirm("クラウドの内容で今のマップを置き換える？")){ refreshCloudStat(); return; }
+    applyState(data); render(); setCloudStat("復元完了"); toast("☁ 復元した"); cloudmask.style.display="none";
+  }catch(e){ toast("復元失敗: "+e.message,true); setCloudStat("エラー: "+e.message); }
+};
+
 //============================================================ boot
 load();
 paintAI();
 modelSel.value=S.model;
 trackCost({input_tokens:0,output_tokens:0});
 render();
+cloudBoot();
 window.addEventListener("resize",positionRing);
 window.addEventListener("beforeunload",save);
 
