@@ -247,13 +247,18 @@ function getKey(){ try{return localStorage.getItem(KEYLS)||"";}catch(e){return""
 //============================================================ node model
 function mkNode(text,x,y,parent,depth){
   const id=uid();
-  S.nodes[id]={id,text,x,y,parent,depth:depth||0,collapsed:false,tag:null};
+  S.nodes[id]={id,text,x,y,parent,depth:depth||0,collapsed:false,tag:null,moved:false};
   return S.nodes[id];
 }
 function childrenOf(id){ return Object.values(S.nodes).filter(n=>n.parent===id); }
 function descendants(id){
   let out=[]; for(const c of childrenOf(id)){ out.push(c.id); out=out.concat(descendants(c.id)); }
   return out;
+}
+function hiddenSet(){
+  const h=new Set();
+  for(const n of Object.values(S.nodes)){ if(n.collapsed) descendants(n.id).forEach(d=>h.add(d)); }
+  return h;
 }
 function delNode(id){
   if(!S.nodes[id]) return;
@@ -276,10 +281,7 @@ function render(){
   // remove old node divs
   [...world.querySelectorAll(".node")].forEach(e=>e.remove());
   // hidden set (collapsed descendants)
-  const hidden=new Set();
-  for(const n of Object.values(S.nodes)){
-    if(n.collapsed) descendants(n.id).forEach(d=>hidden.add(d));
-  }
+  const hidden=hiddenSet();
   for(const n of Object.values(S.nodes)){
     if(hidden.has(n.id)) continue;
     const d=document.createElement("div");
@@ -381,7 +383,7 @@ window.addEventListener("mousemove",e=>{
   }
 });
 window.addEventListener("mouseup",()=>{
-  if(drag){ drag.el.style.cursor="grab"; if(moved){positionRing(); save();} drag=null; }
+  if(drag){ drag.el.style.cursor="grab"; if(moved){ S.nodes[drag.id].moved=true; positionRing(); save(); } drag=null; }
   if(panning){ panning=null; canvas.classList.remove("grabbing"); save(); }
 });
 
@@ -464,7 +466,7 @@ canvas.addEventListener("touchmove",e=>{
 canvas.addEventListener("touchend",e=>{
   if(pinch && e.touches.length<2){ pinch=null; save(); }
   if(tdrag){
-    if(tMoved){ positionRing(); save(); }
+    if(tMoved){ S.nodes[tdrag.id].moved=true; positionRing(); save(); }
     else handleTap(tdrag.id);
     tdrag=null;
   }else if(tpan){
@@ -515,6 +517,42 @@ function setSelected(id){
   save();
 }
 
+// arrow-key spatial navigation between nodes
+function nearestToCenter(){
+  const cx=(innerWidth/2-S.pan.x)/S.zoom, cy=((innerHeight-48)/2-S.pan.y)/S.zoom;
+  let best=null,bd=Infinity;
+  for(const n of Object.values(S.nodes)){ const d=Math.hypot(n.x-cx,n.y-cy); if(d<bd){bd=d;best=n;} }
+  return best;
+}
+function navigate(dir){
+  if(!Object.keys(S.nodes).length) return;
+  if(!sel || !S.nodes[sel]){ const b=nearestToCenter(); if(b){ setSelected(b.id); ensureVisible(b);} return; }
+  const cur=S.nodes[sel];
+  const hidden=hiddenSet();
+  let best=null, bestScore=Infinity;
+  for(const n of Object.values(S.nodes)){
+    if(n.id===sel || hidden.has(n.id)) continue;
+    const dx=n.x-cur.x, dy=n.y-cur.y;
+    let primary, secondary;
+    if(dir==="right"){ if(dx<=1) continue; primary=dx; secondary=Math.abs(dy); }
+    else if(dir==="left"){ if(dx>=-1) continue; primary=-dx; secondary=Math.abs(dy); }
+    else if(dir==="down"){ if(dy<=1) continue; primary=dy; secondary=Math.abs(dx); }
+    else { if(dy>=-1) continue; primary=-dy; secondary=Math.abs(dx); }
+    if(secondary > primary*2 + 60) continue;        // keep within a directional cone
+    const score=primary + secondary*1.6;            // prefer aligned & close
+    if(score<bestScore){ bestScore=score; best=n; }
+  }
+  if(best){ setSelected(best.id); ensureVisible(best); }
+}
+function ensureVisible(n){
+  const sx=n.x*S.zoom+S.pan.x, sy=n.y*S.zoom+S.pan.y;  // canvas-local screen coords
+  const vw=innerWidth, vh=innerHeight-48, m=100;
+  let dx=0,dy=0;
+  if(sx<m) dx=m-sx; else if(sx>vw-m) dx=vw-m-sx;
+  if(sy<m) dy=m-sy; else if(sy>vh-m) dy=vh-m-sy;
+  if(dx||dy){ S.pan.x+=dx; S.pan.y+=dy; applyView(); positionRing(); save(); }
+}
+
 //============================================================ inline edit
 function startEdit(id){
   const el=world.querySelector(`.node[data-id="${id}"]`); if(!el) return;
@@ -550,37 +588,38 @@ function fanAngle(parent){
   }
   return base;
 }
-function placeChildren(parent, count, startIndex){
-  const base=fanAngle(parent);
-  const R=170;
-  const spread=Math.min(Math.PI*0.9, 0.5+count*0.32);
-  const total=count;
-  const pts=[];
-  for(let i=0;i<count;i++){
-    const t = total===1 ? 0 : (i/(total-1)-0.5); // -0.5..0.5
+// re-fan the auto (un-dragged) children of a parent evenly so they never overlap.
+// children the user has manually moved keep their spot.
+function relayoutSiblings(parentId){
+  if(!parentId || !S.nodes[parentId]) return;
+  const p=S.nodes[parentId];
+  const auto=childrenOf(parentId).filter(k=>!k.moved); // creation order preserved
+  const n=auto.length; if(!n) return;
+  const base=fanAngle(p);
+  const R=150 + Math.max(0,n-2)*18;                 // grow radius with count
+  const spread=Math.min(Math.PI*1.25, 0.7 + n*0.42); // grow arc with count
+  auto.forEach((k,i)=>{
+    const t = n===1 ? 0 : (i/(n-1)-0.5); // -0.5..0.5
     const ang=base + t*spread;
-    pts.push({x:parent.x+Math.cos(ang)*R, y:parent.y+Math.sin(ang)*R});
-  }
-  return pts;
+    k.x = p.x + Math.cos(ang)*R;
+    k.y = p.y + Math.sin(ang)*R;
+  });
 }
 function addChild(){
   if(!sel) return;
   const p=S.nodes[sel];
-  const existing=childrenOf(sel).length;
-  const pos=placeChildren(p, existing+1, 0)[existing] || {x:p.x+170,y:p.y};
-  const n=mkNode("…", pos.x, pos.y, sel, (p.depth||0)+1);
+  const n=mkNode("…", p.x+170, p.y, sel, (p.depth||0)+1);
+  relayoutSiblings(sel);
   render(); selectNode(n.id); startEdit(n.id);
 }
 function addSibling(){
   if(!sel) return;
   const cur=S.nodes[sel];
-  if(!cur.parent){ // root sibling = free node
-    const n=mkNode("…", cur.x, cur.y+150, null, 0); render(); selectNode(n.id); startEdit(n.id); return;
+  if(!cur.parent){ // free node has no parent fan → just offset
+    const n=mkNode("…", cur.x+40, cur.y+150, null, 0); render(); selectNode(n.id); startEdit(n.id); return;
   }
-  const p=S.nodes[cur.parent];
-  const existing=childrenOf(cur.parent).length;
-  const pos=placeChildren(p, existing+1, 0)[existing] || {x:cur.x,y:cur.y+120};
-  const n=mkNode("…", pos.x, pos.y, cur.parent, cur.depth);
+  const n=mkNode("…", cur.x, cur.y, cur.parent, cur.depth);
+  relayoutSiblings(cur.parent);
   render(); selectNode(n.id); startEdit(n.id);
 }
 
@@ -593,6 +632,7 @@ window.addEventListener("keydown",e=>{
   else if(e.key==="Delete"||e.key==="Backspace"){ if(sel){ e.preventDefault(); delNode(sel); } }
   else if(e.key==="e"||e.key==="E"){ if(sel) openBolt(); }
   else if(e.key==="F2"){ if(sel) startEdit(sel); }
+  else if(e.key.indexOf("Arrow")===0){ e.preventDefault(); navigate(e.key.slice(5).toLowerCase()); }
 });
 
 //============================================================ toast
@@ -699,13 +739,11 @@ async function expand(mode){
     const txt=await callAI(m.sys, ask);
     const ideas=parseIdeas(txt).slice(0,3);
     if(!ideas.length){ toast("アイデアが取れなかった…もう一回"); }
-    const existing=childrenOf(node.id).length;
-    const pts=placeChildren(node, existing+ideas.length, existing);
     ideas.forEach((txt,i)=>{
-      const pos=pts[existing+i]||{x:node.x+170,y:node.y+i*60};
-      const child=mkNode(txt, pos.x, pos.y, node.id, (node.depth||0)+1);
+      const child=mkNode(txt, node.x+170, node.y+i*60, node.id, (node.depth||0)+1);
       child.tag=m.tag;
     });
+    relayoutSiblings(node.id);
     render();
     // pop animation
     requestAnimationFrame(()=>{ world.querySelectorAll(".node").forEach(d=>{
