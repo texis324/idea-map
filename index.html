@@ -610,17 +610,17 @@ function addChild(){
   const p=S.nodes[sel];
   const n=mkNode("…", p.x+170, p.y, sel, (p.depth||0)+1);
   relayoutSiblings(sel);
-  render(); selectNode(n.id); startEdit(n.id);
+  sel=n.id; render(); ensureVisible(n); startEdit(n.id); // pan so the new node is on-screen before typing
 }
 function addSibling(){
   if(!sel) return;
   const cur=S.nodes[sel];
   if(!cur.parent){ // free node has no parent fan → just offset
-    const n=mkNode("…", cur.x+40, cur.y+150, null, 0); render(); selectNode(n.id); startEdit(n.id); return;
+    const n=mkNode("…", cur.x+40, cur.y+150, null, 0); sel=n.id; render(); ensureVisible(n); startEdit(n.id); return;
   }
   const n=mkNode("…", cur.x, cur.y, cur.parent, cur.depth);
   relayoutSiblings(cur.parent);
-  render(); selectNode(n.id); startEdit(n.id);
+  sel=n.id; render(); ensureVisible(n); startEdit(n.id);
 }
 
 //============================================================ keyboard
