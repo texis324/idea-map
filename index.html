@@ -71,9 +71,9 @@
     padding:1px 6px;border-radius:6px;background:var(--bg2);color:var(--sub);border:1px solid var(--line);}
   .node .badge{position:absolute;top:-9px;right:8px;font-size:10px;}
 
-  /* mini action ring on selected node */
-  #ring{position:absolute;display:none;z-index:20;}
-  #ring button{position:absolute;width:30px;height:30px;border-radius:50%;border:1px solid var(--line);
+  /* mini action toolbar on selected node */
+  #ring{position:absolute;display:none;flex-direction:column;gap:5px;z-index:20;}
+  #ring button{width:30px;height:30px;padding:0;border-radius:50%;border:1px solid var(--line);
     background:var(--bg2);color:var(--txt);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;
     box-shadow:0 3px 8px rgba(0,0,0,.4);}
   #ring button:hover{border-color:var(--accent);transform:scale(1.12);}
@@ -117,10 +117,8 @@
     #cost{min-width:76px;font-size:10px;}
     #hint{font-size:10px;max-width:60vw;padding:6px 8px;line-height:1.45;}
     .node{font-size:14px;padding:10px 13px;}
-    #ring button{width:36px;height:36px;font-size:16px;}
-    #ring button[data-act="child"]{left:38px;top:-8px;}
-    #ring button[data-act="bolt"]{left:26px;top:34px;}
-    #ring button[data-act="del"]{left:-14px;top:26px;}
+    #ring{gap:7px;}
+    #ring button{width:38px;height:38px;font-size:17px;}
     .pop{min-width:220px;}
     .pop .opt{padding:11px 10px;}
   }
@@ -155,9 +153,11 @@
   </div>
 
   <div id="ring">
-    <button data-act="child" title="子ノード追加 (Tab)" style="left:34px;top:-6px;">＋</button>
-    <button data-act="bolt" title="AIで展開 (E)" style="left:24px;top:30px;color:var(--bolt)">⚡</button>
-    <button data-act="del" title="削除 (Del)" style="left:-12px;top:24px;color:var(--danger)">✕</button>
+    <button data-act="child" title="子ノード (Tab)">＋</button>
+    <button data-act="bolt" title="AIで展開 (E)" style="color:var(--bolt)">⚡</button>
+    <button data-act="bigger" title="大きく (＋キー)" style="font-size:13px;font-weight:700">大</button>
+    <button data-act="smaller" title="小さく (－キー)" style="font-size:11px;font-weight:700">小</button>
+    <button data-act="del" title="削除 (Del)" style="color:var(--danger)">✕</button>
   </div>
 
   <div class="pop" id="boltPop">
@@ -233,9 +233,9 @@ function load(){
       S.model=d.model||S.model; S.cost=d.cost||{in:0,out:0}; idc=d.idc||1;
     }catch(e){}
   }
-  if(!raw){ // first run only: plant one seed
+  if(!raw){ // first run only: plant one seed (a touch larger so it reads as the trunk)
     S.nodes={}; S.links=[];
-    const r=mkNode("ここに種を置く", 0, 0, null, 0);
+    const r=mkNode("ここに種を置く", 0, 0, null, 0); r.size=1.6;
     S.root=r.id; sel=r.id;
   }else{ // respect an intentionally-empty canvas; just fix dangling refs
     if(S.root && !S.nodes[S.root]) S.root=Object.keys(S.nodes)[0]||null;
@@ -247,7 +247,7 @@ function getKey(){ try{return localStorage.getItem(KEYLS)||"";}catch(e){return""
 //============================================================ node model
 function mkNode(text,x,y,parent,depth){
   const id=uid();
-  S.nodes[id]={id,text,x,y,parent,depth:depth||0,collapsed:false,tag:null,moved:false};
+  S.nodes[id]={id,text,x,y,parent,depth:depth||0,collapsed:false,tag:null,moved:false,size:1};
   return S.nodes[id];
 }
 function childrenOf(id){ return Object.values(S.nodes).filter(n=>n.parent===id); }
@@ -268,6 +268,13 @@ function delNode(id){
   if(kill.includes(sel)) sel=null;
   if(kill.includes(S.root)) S.root=Object.keys(S.nodes)[0]||null; // root just bootstraps; hand off
   render();
+}
+function resizeNode(id,factor){
+  const n=S.nodes[id]; if(!n) return;
+  n.size=Math.round(Math.min(5,Math.max(0.5,(n.size||1)*factor))*100)/100;
+  const el=world.querySelector(`.node[data-id="${id}"]`);
+  if(el) el.style.transform=`translate(-50%,-50%) scale(${n.size})`;
+  positionRing(); save();
 }
 
 //============================================================ rendering
@@ -292,6 +299,7 @@ function render(){
     d.style.borderColor = n.id===sel?"var(--accent)":(n.parent?"#2b3a4f":col);
     if(!n.parent) d.style.borderColor=col, d.style.borderWidth="2px";
     d.style.setProperty("--c",col);
+    if(n.size && n.size!==1) d.style.transform=`translate(-50%,-50%) scale(${n.size})`;
     d.textContent=n.text;
     if(n.tag){ const t=document.createElement("span"); t.className="tag"; t.textContent=n.tag; t.style.color=col; t.style.borderColor=col; d.appendChild(t); }
     const kids=childrenOf(n.id);
@@ -332,9 +340,12 @@ function positionRing(){
   const el=world.querySelector(`.node[data-id="${sel}"]`);
   if(!el){ ring.style.display="none"; return; }
   const r=el.getBoundingClientRect();
-  ring.style.display="block";
-  ring.style.left=(r.right-6)+"px";
-  ring.style.top=(r.top-6)+"px";
+  ring.style.display="flex";
+  let lx=r.right+6;
+  if(lx+44>innerWidth) lx=r.left-44; // flip to left edge if it would overflow
+  ring.style.left=lx+"px";
+  const rh=ring.offsetHeight||175;
+  ring.style.top=Math.max(52, Math.min(r.top, innerHeight-rh-12))+"px";
 }
 ring.querySelectorAll("button").forEach(b=>{
   b.onmousedown=e=>e.stopPropagation();
@@ -344,6 +355,8 @@ ring.querySelectorAll("button").forEach(b=>{
     if(act==="child") addChild();
     else if(act==="del") delNode(sel);
     else if(act==="bolt") openBolt();
+    else if(act==="bigger") resizeNode(sel,1.25);
+    else if(act==="smaller") resizeNode(sel,1/1.25);
   };
 });
 
@@ -632,6 +645,8 @@ window.addEventListener("keydown",e=>{
   else if(e.key==="Delete"||e.key==="Backspace"){ if(sel){ e.preventDefault(); delNode(sel); } }
   else if(e.key==="e"||e.key==="E"){ if(sel) openBolt(); }
   else if(e.key==="F2"){ if(sel) startEdit(sel); }
+  else if(e.key==="+"||e.key==="="){ if(sel){ e.preventDefault(); resizeNode(sel,1.25); } }
+  else if(e.key==="-"||e.key==="_"){ if(sel){ e.preventDefault(); resizeNode(sel,1/1.25); } }
   else if(e.key.indexOf("Arrow")===0){ e.preventDefault(); navigate(e.key.slice(5).toLowerCase()); }
 });
 
