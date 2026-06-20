@@ -446,12 +446,13 @@ canvas.addEventListener("dblclick",e=>{
 });
 
 //============================================================ touch (mobile)
-let tdrag=null, tpan=null, pinch=null, tMoved=false, tStart=null, lastTap=0, lastTapTarget=null;
-const TAP_MS=320, TAP_SLOP=10;
+// Node drag needs a deliberate DOUBLE-TAP-AND-HOLD; a stray finger pans instead of moving nodes.
+let tnode=null, tpan=null, pinch=null, tMoved=false, tStart=null, lastTap=0, lastTapTarget=null;
+const TAP_MS=340, TAP_SLOP=10;
 
 canvas.addEventListener("touchstart",e=>{
   if(e.touches.length===2){
-    tdrag=tpan=null; closePops();
+    tnode=tpan=null; closePops();
     const [a,b]=e.touches;
     pinch={ d0:Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY),
             mx0:(a.clientX+b.clientX)/2, my0:(a.clientY+b.clientY)/2 };
@@ -464,9 +465,17 @@ canvas.addEventListener("touchstart",e=>{
   if(editing){ commitEdit(); }
   tMoved=false; tStart={x:t.clientX, y:t.clientY};
   if(nodeEl){
-    const n=S.nodes[nodeEl.dataset.id];
-    tdrag={id:nodeEl.dataset.id, sx:t.clientX, sy:t.clientY, ox:n.x, oy:n.y, el:nodeEl};
-    if(sel!==nodeEl.dataset.id) setSelected(nodeEl.dataset.id);
+    const id=nodeEl.dataset.id, n=S.nodes[id];
+    const second = (lastTapTarget===id && performance.now()-lastTap<TAP_MS);
+    if(second){
+      // 2nd tap on the same node → armed: hold & slide = move, quick release = edit
+      tnode={id, sx:t.clientX, sy:t.clientY, ox:n.x, oy:n.y, el:nodeEl, dragging:false};
+    }else{
+      // 1st/standalone touch on a node → select; sliding pans the canvas (node stays put)
+      tpan={sx:t.clientX, sy:t.clientY, px:S.pan.x, py:S.pan.y, node:id};
+    }
+    if(sel!==id) setSelected(id);
+    closePops();
   }else{
     tpan={sx:t.clientX, sy:t.clientY, px:S.pan.x, py:S.pan.y};
     closePops();
@@ -490,15 +499,15 @@ canvas.addEventListener("touchmove",e=>{
     pinch={d0:d1, mx0:mx1, my0:my1};
     applyView(); positionRing(); tMoved=true; return;
   }
-  if(tdrag){
+  if(tnode){
     e.preventDefault();
     const t=e.touches[0];
-    const dx=t.clientX-tdrag.sx, dy=t.clientY-tdrag.sy;
-    if(!tMoved && Math.hypot(dx,dy)>TAP_SLOP){ tMoved=true; ring.style.display="none"; }
-    if(tMoved){
-      const n=S.nodes[tdrag.id];
-      n.x=tdrag.ox+dx/S.zoom; n.y=tdrag.oy+dy/S.zoom;
-      tdrag.el.style.left=n.x+"px"; tdrag.el.style.top=n.y+"px";
+    const dx=t.clientX-tnode.sx, dy=t.clientY-tnode.sy;
+    if(!tnode.dragging && Math.hypot(dx,dy)>TAP_SLOP){ tnode.dragging=true; tMoved=true; ring.style.display="none"; }
+    if(tnode.dragging){
+      const n=S.nodes[tnode.id];
+      n.x=tnode.ox+dx/S.zoom; n.y=tnode.oy+dy/S.zoom;
+      tnode.el.style.left=n.x+"px"; tnode.el.style.top=n.y+"px";
       drawWires(new Set());
     }
   }else if(tpan){
@@ -513,22 +522,20 @@ canvas.addEventListener("touchmove",e=>{
 
 canvas.addEventListener("touchend",e=>{
   if(pinch && e.touches.length<2){ pinch=null; save(); }
-  if(tdrag){
-    if(tMoved){ S.nodes[tdrag.id].moved=true; positionRing(); save(); }
-    else handleTap(tdrag.id);
-    tdrag=null;
+  if(tnode){
+    if(tnode.dragging){ S.nodes[tnode.id].moved=true; positionRing(); save(); }
+    else startEdit(tnode.id);        // 2nd tap released without a slide = edit
+    lastTap=0; lastTapTarget=null;    // consume the double-tap
+    tnode=null;
   }else if(tpan){
-    if(!tMoved) handleBgTap();
-    else save();
+    if(!tMoved){
+      if(tpan.node){ lastTap=performance.now(); lastTapTarget=tpan.node; } // node tap → arm for double
+      else handleBgTap();                                                  // empty tap → add node on double
+    }else save();
     tpan=null;
   }
 },{passive:false});
 
-function handleTap(id){
-  const now=performance.now();
-  if(lastTapTarget===id && now-lastTap<TAP_MS){ lastTap=0; lastTapTarget=null; startEdit(id); }
-  else{ setSelected(id); positionRing(); lastTap=now; lastTapTarget=id; }
-}
 function handleBgTap(){
   const now=performance.now();
   if(lastTapTarget==="__bg__" && now-lastTap<TAP_MS && tStart){
@@ -1023,8 +1030,8 @@ window.addEventListener("beforeunload",save);
 const isTouch = matchMedia("(hover:none)").matches || ("ontouchstart" in window);
 if(isTouch){ document.body.classList.add("touch");
   document.getElementById("hint").innerHTML =
-    "<b>空白2回タップ</b>=ノード追加 / <b>ノード2回タップ</b>=編集 / 1本指=移動&パン / 2本指=ピンチでズーム<br>"+
-    "選択ノードの<b>⚡</b>=AI展開・<b>＋</b>=子・<b>✕</b>=削除。上の<b>⚡展開/🎲</b>でも";
+    "<b>1本指</b>=パン / <b>ノード2回タップ</b>=編集 / <b>2回目を長押し＆スライド</b>=ノード移動 / <b>2本指</b>=ピンチでズーム<br>"+
+    "<b>空白2回タップ</b>=ノード追加。選択ノードの ⚡=AI展開・＋=子・大/小・✕削除";
 }
 const hintEl=document.getElementById("hint");
 hintEl.addEventListener("click",()=>hintEl.style.display="none");
