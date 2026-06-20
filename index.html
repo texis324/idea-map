@@ -969,13 +969,34 @@ function openCloud(){ document.getElementById("ghToken").value=cloudCfg().token;
 document.getElementById("cloudBtn").onclick=openCloud;
 document.getElementById("cloudCancel").onclick=()=>cloudmask.style.display="none";
 cloudmask.onclick=e=>{ if(e.target===cloudmask) cloudmask.style.display="none"; };
+// "untouched default seed" only — used to decide pull-vs-push when connecting a token
+function localIsPristine(){
+  const ids=Object.keys(S.nodes);
+  if(ids.length===0) return true;
+  if(ids.length===1){ const n=S.nodes[ids[0]]; return n.text==="ここに種を置く" && !n.parent; }
+  return false;
+}
 document.getElementById("cloudSaveBtn").onclick=async()=>{
   const v=document.getElementById("ghToken").value.trim();
   try{ localStorage.setItem(GHTOK, v); }catch(e){}
   if(!v){ try{localStorage.removeItem(GISTID);}catch(e){} cloudReady=false; setCloudBtn("off"); setCloudStat("未設定"); toast("クラウド連携を解除"); return; }
-  cloudReady=true; setCloudStat("接続中…");
-  try{ await cloudPush(); toast("☁ 同期した"); cloudmask.style.display="none"; }
-  catch(e){ toast("同期失敗: "+e.message,true); }
+  cloudReady=true; setCloudBtn("saving"); setCloudStat("接続中…");
+  try{
+    // pull first so connecting on a 2nd device gets the existing map instead of clobbering it
+    const pulled=await cloudPull();
+    const cloudHas = pulled && pulled.nodes && Object.keys(pulled.nodes).length;
+    if(cloudHas && localIsPristine()){
+      applyState(pulled); render(); setCloudBtn("saved"); setCloudStat("同期ON");
+      toast("☁ クラウドのマップを読み込んだ"); cloudmask.style.display="none"; return;
+    }
+    if(cloudHas && !localIsPristine()){
+      const takeCloud=confirm("クラウドに既存のマップがあります。\n\nOK = クラウドを取り込む（今の画面は上書き）\nキャンセル = 今の内容をクラウドへ上書き保存");
+      if(takeCloud){ applyState(pulled); render(); setCloudBtn("saved"); setCloudStat("同期ON");
+        toast("☁ クラウドから取り込んだ"); cloudmask.style.display="none"; return; }
+    }
+    // cloud is empty, or user chose to push local up
+    await cloudPush(); toast("☁ 同期した"); cloudmask.style.display="none";
+  }catch(e){ setCloudBtn("error"); toast("同期失敗: "+e.message,true); setCloudStat("エラー: "+e.message); }
 };
 document.getElementById("cloudRestore").onclick=async()=>{
   if(!cloudCfg().token){ toast("先にトークンを保存してね"); return; }
